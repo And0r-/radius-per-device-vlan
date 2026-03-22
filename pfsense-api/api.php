@@ -28,8 +28,23 @@ require_once("util.inc");
 
 // ─── Configuration ──────────────────────────────────────────
 
+// Load .env file if present (for nginx/php-fpm where env vars aren't inherited)
+$_env_file = __DIR__ . '/.env';
+if (file_exists($_env_file)) {
+    foreach (file($_env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $_line) {
+        if (str_starts_with(trim($_line), '#')) continue;
+        if (strpos($_line, '=') === false) continue;
+        [$_k, $_v] = explode('=', $_line, 2);
+        $_ENV[trim($_k)] = trim($_v);
+    }
+}
+
+function cfg($key, $default = '') {
+    return $_ENV[$key] ?? getenv($key) ?: $default;
+}
+
 // MEDIUM-04: Refuse to start with default or weak API key
-$_api_key = getenv('PFSENSE_API_KEY');
+$_api_key = cfg('PFSENSE_API_KEY');
 if (!$_api_key || $_api_key === 'CHANGE_ME' || strlen($_api_key) < 32) {
     error_log("DaathNet API FATAL: PFSENSE_API_KEY not set or too short (need 32+ chars)");
     http_response_code(500);
@@ -37,7 +52,7 @@ if (!$_api_key || $_api_key === 'CHANGE_ME' || strlen($_api_key) < 32) {
     exit(1);
 }
 define('API_KEY', $_api_key);
-define('PARENT_IF', getenv('PFSENSE_PARENT_IF') ?: 'ix2');
+define('PARENT_IF', cfg('PFSENSE_PARENT_IF', 'ix2'));
 define('VLAN_MIN', 100);
 define('VLAN_MAX', 199);
 define('INTERNAL_ALIAS', 'internal_networks');
@@ -68,9 +83,10 @@ if (($_SERVER['HTTP_X_API_KEY'] ?? '') !== API_KEY) {
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
-$uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+// Support both PATH_INFO (php -S router) and query param (nginx/php-fpm)
+$uri = $_SERVER['PATH_INFO'] ?? $_GET['endpoint'] ?? parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-if ($method === 'GET'    && $uri === '/health')          { respond(200, ['status' => 'ok', 'version' => '3.1']); }
+if ($method === 'GET'    && $uri === '/health')          { respond(200, ['status' => 'ok', 'version' => '3.2']); }
 if ($method === 'POST'   && $uri === '/vlan/create')     { handle_vlan_create(); }
 if ($method === 'POST'   && $uri === '/vlan/rename')     { handle_vlan_rename(); }
 if ($method === 'POST'   && $uri === '/vlan/move')       { handle_vlan_move(); }
