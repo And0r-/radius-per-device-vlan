@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — RADIUS Manager{% endblock %}
+{% block content %}
+
+<h1 class="section-title">Dashboard</h1>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Online Pool (120-199)</div>
+        <div class="value" style="color: var(--green)">{{ pools.online.free }}</div>
+        <div class="sub">{{ pools.online.used }}/{{ pools.online.total }} used ({{ pools.online.pct }}%)</div>
+    </div>
+    <div class="card">
+        <div class="label">Offline Pool (100-119)</div>
+        <div class="value" style="color: var(--yellow)">{{ pools.offline.free }}</div>
+        <div class="sub">{{ pools.offline.used }}/{{ pools.offline.total }} used ({{ pools.offline.pct }}%)</div>
+    </div>
+    <div class="card">
+        <div class="label">Enterprise Users</div>
+        <div class="value">{{ user_count }}</div>
+    </div>
+    <div class="card">
+        <div class="label">MAC Devices</div>
+        <div class="value">{{ device_count }}</div>
+    </div>
+</div>
+
+<h2 class="section-title">Recent Auth Log</h2>
+<table>
+    <thead>
+        <tr><th>Time</th><th>MAC</th><th>User</th><th>Result</th><th>VLAN</th><th>SSID</th></tr>
+    </thead>
+    <tbody>
+        {% for log in recent_logs %}
+        <tr>
+            <td>{{ log.ts.strftime('%Y-%m-%d %H:%M:%S') if log.ts else '' }}</td>
+            <td class="mono">{{ log.mac or '' }}</td>
+            <td>{{ log.username or '' }}</td>
+            <td><span class="badge {{ log.result }}">{{ log.result }}</span></td>
+            <td>{{ log.vlan_id or '' }}</td>
+            <td>{{ log.ssid or '' }}</td>
+        </tr>
+        {% endfor %}
+        {% if not recent_logs %}
+        <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:2rem">No auth logs yet</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Users — RADIUS Manager{% endblock %}
+{% block content %}
+
+<h1 class="section-title">Enterprise Users</h1>
+
+<form method="POST" action="{{ url_for('user_add') }}">
+    <div class="form-row">
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" name="username" placeholder="e.g. andi-desktop" required>
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="text" name="password" placeholder="WPA3-Enterprise password" required>
+        </div>
+        <div class="form-group">
+            <label>MAC Address</label>
+            <input type="text" name="mac" placeholder="aabbccddeeff" required pattern="[0-9a-fA-F:\-\.]{12,17}">
+        </div>
+        <div class="form-group">
+            <label>Device Name</label>
+            <input type="text" name="name" placeholder="e.g. Desktop PC">
+        </div>
+        <div class="form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="btn btn-primary">Add User</button>
+        </div>
+    </div>
+</form>
+
+<table>
+    <thead>
+        <tr><th>Username</th><th>MAC</th><th>VLAN</th><th>Device</th><th>Added</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+        {% for u in users %}
+        <tr>
+            <td><strong>{{ u.username }}</strong></td>
+            <td class="mono">{{ u.mac }}</td>
+            <td>{{ u.vlan_id }}</td>
+            <td>{{ u.device_name or '' }}</td>
+            <td>{{ u.created_at.strftime('%Y-%m-%d') if u.created_at else '' }}</td>
+            <td class="actions">
+                <form method="POST" action="{{ url_for('user_password', username=u.username) }}" style="display:flex;gap:0.3rem;">
+                    <input type="text" name="password" placeholder="new password" style="width:130px;padding:0.25rem 0.5rem;font-size:0.8rem;">
+                    <button type="submit" class="btn btn-ghost btn-sm">Update</button>
+                </form>
+                <form method="POST" action="{{ url_for('user_delete', username=u.username) }}" onsubmit="return confirm('Remove user {{ u.username }}?')">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        {% if not users %}
+        <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:2rem">No users yet — add one above</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+{% endblock %}

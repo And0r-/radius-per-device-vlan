@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Auth Logs — RADIUS Manager{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+    <h1 class="section-title" style="margin-bottom:0">Auth Logs</h1>
+    <div style="display:flex;gap:0.5rem;">
+        <a href="{{ url_for('logs', limit=50) }}" class="btn btn-ghost btn-sm {% if limit == 50 %}btn-primary{% endif %}">50</a>
+        <a href="{{ url_for('logs', limit=200) }}" class="btn btn-ghost btn-sm {% if limit == 200 %}btn-primary{% endif %}">200</a>
+        <a href="{{ url_for('logs', limit=1000) }}" class="btn btn-ghost btn-sm {% if limit == 1000 %}btn-primary{% endif %}">1000</a>
+    </div>
+</div>
+
+<table>
+    <thead>
+        <tr><th>Time</th><th>MAC</th><th>User</th><th>Result</th><th>VLAN</th><th>SSID</th></tr>
+    </thead>
+    <tbody>
+        {% for log in logs %}
+        <tr>
+            <td>{{ log.ts.strftime('%Y-%m-%d %H:%M:%S') if log.ts else '' }}</td>
+            <td class="mono">{{ log.mac or '' }}</td>
+            <td>{{ log.username or '' }}</td>
+            <td><span class="badge {{ log.result }}">{{ log.result }}</span></td>
+            <td>{{ log.vlan_id or '' }}</td>
+            <td>{{ log.ssid or '' }}</td>
+        </tr>
+        {% endfor %}
+        {% if not logs %}
+        <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:2rem">No logs yet</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+{% endblock %}

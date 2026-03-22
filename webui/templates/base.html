@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RADIUS Manager{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+            --text: #e1e4eb; --muted: #8b8fa3; --accent: #6c7aed;
+            --green: #34d399; --red: #f87171; --yellow: #fbbf24; --blue: #60a5fa;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 2rem; display: flex; align-items: center; gap: 2rem; height: 56px; }
+        nav .brand { font-weight: 700; font-size: 1.1rem; color: var(--accent); }
+        nav a { color: var(--muted); font-size: 0.9rem; padding: 0.4rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: var(--text); text-decoration: none; border-bottom-color: var(--accent); }
+
+        .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+
+        .flash { padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.9rem; }
+        .flash.success { background: #0d2818; border: 1px solid #166534; color: var(--green); }
+        .flash.error { background: #2d1215; border: 1px solid #991b1b; color: var(--red); }
+
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .card .label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .card .value { font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; }
+        .card .sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+
+        table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+        th { text-align: left; padding: 0.75rem 1rem; background: var(--border); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+        td { padding: 0.6rem 1rem; border-top: 1px solid var(--border); font-size: 0.9rem; }
+        tr:hover td { background: rgba(108, 122, 237, 0.05); }
+
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge.online { background: #0d2818; color: var(--green); }
+        .badge.offline { background: #2d1215; color: var(--red); }
+        .badge.accept { background: #0d2818; color: var(--green); }
+        .badge.reject { background: #2d1215; color: var(--red); }
+
+        .form-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 1.5rem; }
+        .form-group { display: flex; flex-direction: column; gap: 0.25rem; }
+        .form-group label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        input, select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.9rem; }
+        input:focus, select:focus { outline: none; border-color: var(--accent); }
+        input::placeholder { color: var(--muted); }
+
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 600; transition: opacity 0.15s; }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-danger { background: var(--red); color: white; }
+        .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+        .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+        .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+
+        .section-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 1rem; }
+        .mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.85rem; }
+
+        .actions { display: flex; gap: 0.3rem; }
+        .actions form { display: inline; }
+
+        @media (max-width: 768px) {
+            .form-row { flex-direction: column; }
+            .container { padding: 1rem; }
+            nav { padding: 0 1rem; gap: 1rem; overflow-x: auto; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">RADIUS</span>
+        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a>
+        <a href="{{ url_for('devices') }}" class="{% if request.endpoint == 'devices' %}active{% endif %}">Devices</a>
+        <a href="{{ url_for('users') }}" class="{% if request.endpoint == 'users' %}active{% endif %}">Users</a>
+        <a href="{{ url_for('logs') }}" class="{% if request.endpoint == 'logs' %}active{% endif %}">Logs</a>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
