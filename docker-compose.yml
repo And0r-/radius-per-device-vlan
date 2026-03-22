@@ -46,12 +46,6 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
-      - ANDI_DESKTOP_PASS=${ANDI_DESKTOP_PASS}
-      - ANDI_MOBILE_PASS=${ANDI_MOBILE_PASS}
-      - WORK_LAPTOP_PASS=${WORK_LAPTOP_PASS}
-      - MAC_ANDI_DESKTOP=${MAC_ANDI_DESKTOP}
-      - MAC_ANDI_MOBILE=${MAC_ANDI_MOBILE}
-      - MAC_WORK_LAPTOP=${MAC_WORK_LAPTOP}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
