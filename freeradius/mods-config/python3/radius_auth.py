@@ -277,7 +277,6 @@ def authorize(p):
                         (('Cleartext-Password', mac),))
 
             # Unknown MAC — auto-assign
-            cur.close()
             if not check_simultaneous_use(db, calling_station):
                 return _reject(db, mac, username, ssid, 'Simultaneous login not allowed')
 
