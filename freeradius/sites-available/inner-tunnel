@@ -1,0 +1,43 @@
+server inner-tunnel {
+    listen {
+        ipaddr = 127.0.0.1
+        port = 18120
+        type = auth
+    }
+
+    authorize {
+        filter_username
+        chap
+        mschap
+        suffix
+
+        # Enterprise auth -> Python handles lookup + VLAN
+        python3
+
+        pap
+    }
+
+    authenticate {
+        Auth-Type PAP {
+            pap
+        }
+
+        Auth-Type CHAP {
+            chap
+        }
+
+        Auth-Type MS-CHAP {
+            mschap
+        }
+
+        eap
+    }
+
+    post-auth {
+        python3
+
+        Post-Auth-Type REJECT {
+            attr_filter.access_reject
+        }
+    }
+}

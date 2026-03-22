@@ -1,0 +1,90 @@
+services:
+  freeradius:
+    build: ./freeradius
+    container_name: freeradius
+    restart: unless-stopped
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - RADIUS_SECRET=${RADIUS_SECRET}
+    volumes:
+      # Templates (contain ${VAR} placeholders, entrypoint runs envsubst)
+      - ./freeradius/clients.conf:/templates/clients.conf:ro
+      - ./freeradius/mods-available/sql:/templates/mods-available-sql:ro
+      # Direct mounts (no secrets)
+      - ./freeradius/mods-available/eap:/etc/freeradius/3.0/mods-available/eap:ro
+      - ./freeradius/mods-available/python3:/etc/freeradius/3.0/mods-available/python3:ro
+      - ./freeradius/mods-config/python3/radius_auth.py:/etc/freeradius/3.0/mods-config/python3/radius_auth.py:ro
+      - ./freeradius/sites-available/default:/etc/freeradius/3.0/sites-available/default:ro
+      - ./freeradius/sites-available/inner-tunnel:/etc/freeradius/3.0/sites-available/inner-tunnel:ro
+      - radius_certs:/certs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "radclient", "-c", "1", "-t", "2", "127.0.0.1:18121", "status", "testing123"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - radius-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: radius-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - ANDI_DESKTOP_PASS=${ANDI_DESKTOP_PASS}
+      - ANDI_MOBILE_PASS=${ANDI_MOBILE_PASS}
+      - WORK_LAPTOP_PASS=${WORK_LAPTOP_PASS}
+      - MAC_ANDI_DESKTOP=${MAC_ANDI_DESKTOP}
+      - MAC_ANDI_MOBILE=${MAC_ANDI_MOBILE}
+      - MAC_WORK_LAPTOP=${MAC_WORK_LAPTOP}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./postgres/02-seed.sh:/docker-entrypoint-initdb.d/02-seed.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - radius-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: radius-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - radius-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  radius_certs:
+
+networks:
+  radius-net:
+    driver: bridge

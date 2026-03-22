@@ -1,0 +1,46 @@
+eap {
+    default_eap_type = peap
+    timer_expire = 60
+    ignore_unknown_eap_types = no
+    cisco_accounting_username_bug = no
+    max_sessions = ${max_requests}
+
+    tls-config tls-common {
+        private_key_password =
+        private_key_file = /certs/server.key
+        certificate_file = /certs/server.pem
+        ca_file = /certs/ca.pem
+        dh_file = /certs/dh
+        ca_path = ${cadir}
+        cipher_list = "DEFAULT"
+        cipher_server_preference = no
+        tls_min_version = "1.2"
+        ecdh_curve = "prime256v1"
+
+        cache {
+            enable = yes
+            lifetime = 24
+            name = "EAP module"
+            max_entries = 255
+            persist_dir = ${logdir}/tlscache
+        }
+
+        verify {
+        }
+
+        ocsp {
+            enable = no
+        }
+    }
+
+    peap {
+        tls = tls-common
+        default_eap_type = mschapv2
+        copy_request_to_tunnel = yes
+        use_tunneled_reply = yes
+        virtual_server = "inner-tunnel"
+    }
+
+    mschapv2 {
+    }
+}

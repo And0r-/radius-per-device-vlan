@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# System / dotfiles
+.ash_history
+.cache/
+.claude/
+.claude.json
+.docker/
+.npm/
+.profile
+.ssh/
+
+# Project-local
+CLAUDE.md

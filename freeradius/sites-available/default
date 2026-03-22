@@ -1,0 +1,85 @@
+server default {
+    listen {
+        type = auth
+        ipaddr = *
+        port = 0
+        limit {
+            max_connections = 16
+            lifetime = 0
+            idle_timeout = 30
+        }
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 0
+        limit {
+        }
+    }
+
+    authorize {
+        filter_username
+        preprocess
+        chap
+        mschap
+        suffix
+
+        # EAP requests -> handle and return (inner tunnel does the work)
+        eap {
+            ok = return
+        }
+
+        # Non-EAP (MAC auth) -> Python handles lookup + auto-assign
+        python3
+
+        pap
+    }
+
+    authenticate {
+        Auth-Type PAP {
+            pap
+        }
+
+        Auth-Type CHAP {
+            chap
+        }
+
+        Auth-Type MS-CHAP {
+            mschap
+        }
+
+        eap
+    }
+
+    preacct {
+        preprocess
+        acct_unique
+        suffix
+    }
+
+    accounting {
+        sql
+    }
+
+    post-auth {
+        python3
+
+        Post-Auth-Type REJECT {
+            attr_filter.access_reject
+        }
+    }
+}
+
+# Status server for health checks
+server status {
+    listen {
+        ipaddr = 127.0.0.1
+        port = 18121
+        type = status
+    }
+
+    authorize {
+        ok
+    }
+}

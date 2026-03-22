@@ -1,0 +1,10 @@
+python3 {
+    python_path = ${modconfdir}/python3
+    module = radius_auth
+
+    mod_authorize = radius_auth
+    func_authorize = authorize
+
+    mod_post_auth = radius_auth
+    func_post_auth = post_auth
+}
