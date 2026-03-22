@@ -51,6 +51,21 @@ docker compose down          # Stop
 docker compose logs -f freeradius  # Logs
 ```
 
+## Web UI
+
+Web management interface on port 8443 (self-signed TLS).
+
+- **Dashboard** — Pool status, recent auth logs
+- **Devices** — Add/remove MAC devices, move between pools
+- **Users** — Add/remove enterprise users, change passwords
+- **Logs** — Filterable auth log
+
+```
+https://<host>:8443
+```
+
+Designed to be placed behind Traefik + Keycloak OAuth proxy for authentication.
+
 ## Management CLI
 
 ```bash
@@ -123,7 +138,12 @@ docker compose exec freeradius cat /certs/ca.pem
 │   └── sites-available/
 │       ├── default                   # Outer server
 │       └── inner-tunnel              # PEAP inner tunnel
+├── webui/
+│   ├── Dockerfile
+│   ├── app.py                        # Flask web management UI
+│   ├── requirements.txt
+│   └── templates/                    # Jinja2 HTML templates
 └── postgres/
     ├── 01-schema.sql                 # DB schema + VLAN pool
-    └── 02-seed.sh                    # Initial devices (uses env vars for passwords)
+    └── 02-seed.sh                    # Seed placeholder (add devices via manage.sh or web UI)
 ```
