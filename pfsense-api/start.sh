@@ -21,7 +21,7 @@ export PFSENSE_API_KEY PFSENSE_PARENT_IF
 
 echo "==> Starting DaathNet VLAN API on ${PFSENSE_LISTEN}"
 echo "    Parent interface: ${PFSENSE_PARENT_IF}"
-echo "    API key: ${PFSENSE_API_KEY:0:4}..."
+echo "    API key: (${#PFSENSE_API_KEY} chars)"
 
 cd "$API_DIR"
 exec php -S "${PFSENSE_LISTEN}" api.php

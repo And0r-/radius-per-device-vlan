@@ -28,26 +28,49 @@ require_once("util.inc");
 
 // ─── Configuration ──────────────────────────────────────────
 
-define('API_KEY', getenv('PFSENSE_API_KEY') ?: 'CHANGE_ME');
+// MEDIUM-04: Refuse to start with default or weak API key
+$_api_key = getenv('PFSENSE_API_KEY');
+if (!$_api_key || $_api_key === 'CHANGE_ME' || strlen($_api_key) < 32) {
+    error_log("DaathNet API FATAL: PFSENSE_API_KEY not set or too short (need 32+ chars)");
+    http_response_code(500);
+    echo json_encode(['error' => 'Server misconfigured: API key not set or too short']) . "\n";
+    exit(1);
+}
+define('API_KEY', $_api_key);
 define('PARENT_IF', getenv('PFSENSE_PARENT_IF') ?: 'ix2');
 define('VLAN_MIN', 100);
 define('VLAN_MAX', 199);
 define('INTERNAL_ALIAS', 'internal_networks');
 define('DB_PATH', __DIR__ . '/daathnet.db');
 define('TRACKER_BASE', 1700000000);
+define('LOCK_FILE', '/tmp/daathnet-api.lock');
+define('MAX_NAME_LENGTH', 64);
+define('AUTH_FAIL_LIMIT', 10);   // max failed auths per minute
+define('AUTH_FAIL_WINDOW', 60);  // seconds
 
 // ─── Request Handling ───────────────────────────────────────
 
 header('Content-Type: application/json');
 
+// LOW-02: Log all requests
+syslog(LOG_NOTICE, "DaathNet API: {$_SERVER['REQUEST_METHOD']} {$_SERVER['REQUEST_URI']} from {$_SERVER['REMOTE_ADDR']}");
+
+// HIGH-03: Rate limiting for auth failures
+if (!check_rate_limit($_SERVER['REMOTE_ADDR'])) {
+    syslog(LOG_WARNING, "DaathNet API: Rate limited {$_SERVER['REMOTE_ADDR']}");
+    respond(429, ['error' => 'Too many failed attempts. Try again later.']);
+}
+
 if (($_SERVER['HTTP_X_API_KEY'] ?? '') !== API_KEY) {
+    record_auth_failure($_SERVER['REMOTE_ADDR']);
+    syslog(LOG_WARNING, "DaathNet API: Auth failed from {$_SERVER['REMOTE_ADDR']}");
     respond(401, ['error' => 'Unauthorized']);
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-if ($method === 'GET'    && $uri === '/health')          { respond(200, ['status' => 'ok', 'version' => '3.0']); }
+if ($method === 'GET'    && $uri === '/health')          { respond(200, ['status' => 'ok', 'version' => '3.1']); }
 if ($method === 'POST'   && $uri === '/vlan/create')     { handle_vlan_create(); }
 if ($method === 'POST'   && $uri === '/vlan/rename')     { handle_vlan_rename(); }
 if ($method === 'POST'   && $uri === '/vlan/move')       { handle_vlan_move(); }
@@ -79,6 +102,49 @@ function validate_vlan_id($id) {
     return (int)$id;
 }
 
+// MEDIUM-03: Validate and sanitize name input
+function validate_name($raw) {
+    $name = trim($raw ?? '');
+    if (empty($name)) $name = 'unnamed';
+    $name = substr($name, 0, MAX_NAME_LENGTH);
+    if (!preg_match('/^[a-zA-Z0-9_ -]+$/', $name)) {
+        respond(400, ['error' => 'Invalid name. Allowed: letters, numbers, spaces, hyphens, underscores.']);
+    }
+    return $name;
+}
+
+// MEDIUM-01: File lock for mutation endpoints
+// Lock is held until process exits (flock auto-releases on close/exit)
+function acquire_mutation_lock() {
+    $lock = fopen(LOCK_FILE, 'c');
+    if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+        respond(503, ['error' => 'Another operation in progress. Try again.']);
+    }
+    // Lock stays open until script exits — PHP auto-releases on exit
+    return $lock;
+}
+
+// HIGH-03: Rate limiting for auth failures (stored in SQLite)
+function check_rate_limit($ip) {
+    $db = get_db();
+    $cutoff = time() - AUTH_FAIL_WINDOW;
+    $stmt = $db->prepare("SELECT COUNT(*) FROM auth_failures WHERE ip = :ip AND ts > :cutoff");
+    $stmt->bindValue(':ip', $ip);
+    $stmt->bindValue(':cutoff', $cutoff, SQLITE3_INTEGER);
+    $count = $stmt->execute()->fetchArray()[0];
+    return $count < AUTH_FAIL_LIMIT;
+}
+
+function record_auth_failure($ip) {
+    $db = get_db();
+    $stmt = $db->prepare("INSERT INTO auth_failures (ip, ts) VALUES (:ip, :ts)");
+    $stmt->bindValue(':ip', $ip);
+    $stmt->bindValue(':ts', time(), SQLITE3_INTEGER);
+    $stmt->execute();
+    // Cleanup old entries
+    $db->exec("DELETE FROM auth_failures WHERE ts < " . (time() - AUTH_FAIL_WINDOW * 2));
+}
+
 // ─── SQLite Database ────────────────────────────────────────
 
 function get_db() {
@@ -89,6 +155,13 @@ function get_db() {
     $db->busyTimeout(5000);
     $db->exec("PRAGMA journal_mode=WAL");
     $db->exec("PRAGMA foreign_keys=ON");
+
+    // LOW-03: Integrity check
+    $integrity = $db->querySingle("PRAGMA integrity_check");
+    if ($integrity !== 'ok') {
+        error_log("DaathNet API WARNING: SQLite DB integrity check failed: {$integrity}");
+        syslog(LOG_ERR, "DaathNet API: SQLite DB corrupt: {$integrity}");
+    }
 
     $db->exec("
         CREATE TABLE IF NOT EXISTS vlans (
@@ -103,6 +176,11 @@ function get_db() {
         CREATE TABLE IF NOT EXISTS floating_rules (
             rule_name     TEXT PRIMARY KEY,
             tracker_id    INTEGER NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS auth_failures (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip   TEXT NOT NULL,
+            ts   INTEGER NOT NULL
         );
     ");
 
@@ -285,6 +363,7 @@ function make_description($vlan_id, $pool, $name) {
 // ─── Floating Rules Init ────────────────────────────────────
 
 function handle_floating_init() {
+    acquire_mutation_lock();
     global $config;
     $db = get_db();
 
@@ -393,12 +472,13 @@ function handle_floating_status() {
 // ─── VLAN Create ────────────────────────────────────────────
 
 function handle_vlan_create() {
+    acquire_mutation_lock();
     global $config;
     $db = get_db();
 
     $body = get_json_body();
     $vlan_id = validate_vlan_id($body['vlan_id'] ?? 0);
-    $name = $body['name'] ?? 'unnamed';
+    $name = validate_name($body['name'] ?? 'unnamed');
     $pool = $body['pool'] ?? 'online';
 
     if (!in_array($pool, ['online', 'offline'])) {
@@ -482,13 +562,13 @@ function handle_vlan_create() {
 // ─── VLAN Rename ────────────────────────────────────────────
 
 function handle_vlan_rename() {
+    acquire_mutation_lock();
     global $config;
     $db = get_db();
 
     $body = get_json_body();
     $vlan_id = validate_vlan_id($body['vlan_id'] ?? 0);
-    $name = trim($body['name'] ?? '');
-    if (empty($name)) respond(400, ['error' => 'Name is required']);
+    $name = validate_name($body['name'] ?? '');
 
     $vlan = db_get_vlan($vlan_id);
     if (!$vlan) respond(404, ['error' => "VLAN {$vlan_id} not managed by this API"]);
@@ -506,7 +586,7 @@ function handle_vlan_rename() {
     // Update VLAN description
     if (is_array($config['vlans']['vlan'] ?? null)) {
         foreach ($config['vlans']['vlan'] as &$v) {
-            if (($v['if'] ?? '') === PARENT_IF && ($v['tag'] ?? '') == $vlan_id) {
+            if (($v['if'] ?? '') === PARENT_IF && (string)($v['tag'] ?? '') === (string)$vlan_id) {
                 $v['descr'] = $new_descr;
                 break;
             }
@@ -527,6 +607,7 @@ function handle_vlan_rename() {
 // ─── VLAN Move ──────────────────────────────────────────────
 
 function handle_vlan_move() {
+    acquire_mutation_lock();
     global $config;
     $db = get_db();
 
@@ -613,6 +694,7 @@ function handle_vlan_list() {
 // ─── VLAN Delete ────────────────────────────────────────────
 
 function handle_vlan_delete($vlan_id) {
+    acquire_mutation_lock();
     global $config;
     $db = get_db();
 
@@ -640,7 +722,7 @@ function handle_vlan_delete($vlan_id) {
     if (is_array($config['vlans']['vlan'] ?? null)) {
         $config['vlans']['vlan'] = array_values(array_filter(
             $config['vlans']['vlan'],
-            fn($v) => !(($v['if'] ?? '') === PARENT_IF && ($v['tag'] ?? '') == $vlan_id)
+            fn($v) => !(($v['if'] ?? '') === PARENT_IF && (string)($v['tag'] ?? '') === (string)$vlan_id)
         ));
     }
 
