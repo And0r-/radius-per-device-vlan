@@ -11,8 +11,13 @@ server inner-tunnel {
         mschap
         suffix
 
-        # Enterprise auth -> Python handles lookup + VLAN
+        # Enterprise auth -> Python handles lookup + VLAN + sets Cleartext-Password
         python3
+
+        # EAP in authorize recognizes inner EAP-MSCHAPv2 and sets Auth-Type = EAP
+        eap {
+            ok = return
+        }
 
         pap
     }
