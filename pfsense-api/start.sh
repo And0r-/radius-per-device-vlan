@@ -1,21 +1,27 @@
 #!/bin/sh
 # Start the DaathNet VLAN API server on pfSense
-# Usage: PFSENSE_API_KEY=<secret> PFSENSE_PARENT_IF=ix2 sh start.sh
-#
-# For dev:  PFSENSE_API_KEY=devkey PFSENSE_PARENT_IF=vtnet0 php -S 0.0.0.0:9443 api.php
-# For prod: PFSENSE_API_KEY=<secret> PFSENSE_PARENT_IF=ix2 php -S 192.168.4.1:9443 api.php
+# Reads config from .env file if present, or uses environment variables.
 
 set -e
 
+API_DIR="/usr/local/www/api"
+
+# Load .env if present
+if [ -f "$API_DIR/.env" ]; then
+    set -a
+    . "$API_DIR/.env"
+    set +a
+fi
+
 : "${PFSENSE_API_KEY:=CHANGE_ME}"
 : "${PFSENSE_PARENT_IF:=ix2}"
-: "${LISTEN:=0.0.0.0:9443}"
+: "${PFSENSE_LISTEN:=0.0.0.0:9444}"
 
 export PFSENSE_API_KEY PFSENSE_PARENT_IF
 
-echo "==> Starting DaathNet VLAN API on ${LISTEN}"
+echo "==> Starting DaathNet VLAN API on ${PFSENSE_LISTEN}"
 echo "    Parent interface: ${PFSENSE_PARENT_IF}"
 echo "    API key: ${PFSENSE_API_KEY:0:4}..."
 
-cd /usr/local/www/api
-exec php -S "${LISTEN}" api.php
+cd "$API_DIR"
+exec php -S "${PFSENSE_LISTEN}" api.php

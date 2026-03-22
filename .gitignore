@@ -1,5 +1,6 @@
 # Secrets
 .env
+pfsense-api/.env
 
 # System / dotfiles
 .ash_history

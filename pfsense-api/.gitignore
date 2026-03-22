@@ -1,0 +1,5 @@
+# Runtime data (created on pfSense)
+daathnet.db
+daathnet.db-wal
+daathnet.db-shm
+.env
