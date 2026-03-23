@@ -186,6 +186,8 @@ function get_db() {
             pool          TEXT NOT NULL DEFAULT 'online',
             name          TEXT NOT NULL DEFAULT 'unnamed',
             block_tracker INTEGER,
+            dns_tracker   INTEGER,
+            dhcp_tracker  INTEGER,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -256,8 +258,8 @@ function assert_owned_tracker($tracker) {
     $stmt = $db->prepare("SELECT COUNT(*) FROM floating_rules WHERE tracker_id = :t");
     $stmt->bindValue(':t', $tracker, SQLITE3_INTEGER);
     if ($stmt->execute()->fetchArray()[0] > 0) return;
-    // Check VLAN block trackers
-    $stmt = $db->prepare("SELECT COUNT(*) FROM vlans WHERE block_tracker = :t");
+    // Check VLAN trackers (block, dns, dhcp)
+    $stmt = $db->prepare("SELECT COUNT(*) FROM vlans WHERE block_tracker = :t OR dns_tracker = :t OR dhcp_tracker = :t");
     $stmt->bindValue(':t', $tracker, SQLITE3_INTEGER);
     if ($stmt->execute()->fetchArray()[0] > 0) return;
 
@@ -401,12 +403,10 @@ function handle_floating_init() {
     }
     $db->exec("DELETE FROM floating_rules");
 
-    // 2. Define tracker IDs
+    // 2. Define tracker IDs (only 2 floating rules: block + internet)
     $trackers = [
-        'dns'      => TRACKER_BASE + 1,
-        'dhcp'     => TRACKER_BASE + 2,
-        'internet' => TRACKER_BASE + 3,
-        'block'    => TRACKER_BASE + 9,
+        'block'    => TRACKER_BASE + 1,
+        'internet' => TRACKER_BASE + 2,
     ];
 
     // 3. Save tracker IDs to DB first (so ownership guards work)
@@ -431,25 +431,20 @@ function handle_floating_init() {
 
     $iface_string = implode(',', $owned_ifaces);
 
-    // 5. Create floating rules with ONLY managed interfaces
+    // 5. Create floating rules — Block FIRST (no quick = last match wins)
     pf_ensure_internal_alias();
     pf_ensure_array($config, 'filter');
     pf_ensure_array($config['filter'], 'rule');
 
+    // Block all (first = lowest priority, will be overridden by later matches)
     $config['filter']['rule'][] = [
-        'type' => 'pass', 'floating' => 'yes', 'interface' => $iface_string,
-        'ipprotocol' => 'inet', 'protocol' => 'udp',
-        'source' => ['any' => ''], 'destination' => ['port' => '53'],
-        'descr' => 'DaathNet: Allow DNS', 'tracker' => (string)$trackers['dns'],
+        'type' => 'block', 'floating' => 'yes', 'interface' => $iface_string,
+        'ipprotocol' => 'inet',
+        'source' => ['any' => ''], 'destination' => ['any' => ''],
+        'descr' => 'DaathNet: Block all', 'tracker' => (string)$trackers['block'],
     ];
 
-    $config['filter']['rule'][] = [
-        'type' => 'pass', 'floating' => 'yes', 'interface' => $iface_string,
-        'ipprotocol' => 'inet', 'protocol' => 'udp',
-        'source' => ['any' => ''], 'destination' => ['any' => '', 'port' => '67-68'],
-        'descr' => 'DaathNet: Allow DHCP', 'tracker' => (string)$trackers['dhcp'],
-    ];
-
+    // Allow Internet NOT internal (overrides block for internet-bound traffic)
     $config['filter']['rule'][] = [
         'type' => 'pass', 'floating' => 'yes', 'interface' => $iface_string,
         'ipprotocol' => 'inet',
@@ -457,12 +452,7 @@ function handle_floating_init() {
         'descr' => 'DaathNet: Allow Internet (block internal)', 'tracker' => (string)$trackers['internet'],
     ];
 
-    $config['filter']['rule'][] = [
-        'type' => 'block', 'floating' => 'yes', 'interface' => $iface_string,
-        'ipprotocol' => 'inet',
-        'source' => ['any' => ''], 'destination' => ['any' => ''],
-        'descr' => 'DaathNet: Block all other', 'tracker' => (string)$trackers['block'],
-    ];
+    // DNS and DHCP are handled per-interface (not floating) — see handle_vlan_create()
 
     // 6. Apply
     write_config("DaathNet API: Floating rules initialized");
@@ -535,28 +525,54 @@ function handle_vlan_create() {
         'gateway' => $ip,
     ];
 
-    // 4. Offline block rule (interface-level)
+    // 4. Interface rules: DNS + DHCP to own gateway
+    pf_ensure_array($config, 'filter');
+    pf_ensure_array($config['filter'], 'rule');
+
+    $dns_tracker = TRACKER_BASE + $vlan_id * 10 + 1;
+    $dhcp_tracker = TRACKER_BASE + $vlan_id * 10 + 2;
+
+    // Allow DNS to own gateway
+    $config['filter']['rule'][] = [
+        'type' => 'pass', 'interface' => $opt_key, 'ipprotocol' => 'inet',
+        'protocol' => 'udp',
+        'source' => ['network' => $opt_key],
+        'destination' => ['address' => $ip, 'port' => '53'],
+        'descr' => "DaathNet v{$vlan_id}: Allow DNS",
+        'tracker' => (string)$dns_tracker,
+    ];
+
+    // Allow DHCP to own gateway
+    $config['filter']['rule'][] = [
+        'type' => 'pass', 'interface' => $opt_key, 'ipprotocol' => 'inet',
+        'protocol' => 'udp',
+        'source' => ['any' => ''],
+        'destination' => ['address' => $ip, 'port' => '67-68'],
+        'descr' => "DaathNet v{$vlan_id}: Allow DHCP",
+        'tracker' => (string)$dhcp_tracker,
+    ];
+
+    // 5. Offline block rule (interface-level, blocks internet from floating rule)
     $block_tracker = null;
     if ($pool === 'offline') {
-        $block_tracker = TRACKER_BASE + $vlan_id * 10;
-        pf_ensure_array($config, 'filter');
-        pf_ensure_array($config['filter'], 'rule');
-        array_unshift($config['filter']['rule'], [
+        $block_tracker = TRACKER_BASE + $vlan_id * 10 + 9;
+        $config['filter']['rule'][] = [
             'type' => 'block', 'interface' => $opt_key, 'ipprotocol' => 'inet',
-            'source' => ['any' => ''],
-            'destination' => ['any' => '', 'not' => '', 'address' => $ip, 'port' => '53'],
-            'descr' => "DaathNet {$vlan_id}: Offline block (except DNS)",
+            'source' => ['any' => ''], 'destination' => ['any' => ''],
+            'descr' => "DaathNet v{$vlan_id}: Offline block all",
             'tracker' => (string)$block_tracker,
-        ]);
+        ];
     }
 
-    // 5. Save to SQLite FIRST (so sync_floating_rules can find it)
-    $stmt = $db->prepare("INSERT INTO vlans (vlan_id, pfsense_if, pool, name, block_tracker) VALUES (:id, :if, :pool, :name, :bt)");
+    // 6. Save to SQLite FIRST (so sync_floating_rules can find it)
+    $stmt = $db->prepare("INSERT INTO vlans (vlan_id, pfsense_if, pool, name, block_tracker, dns_tracker, dhcp_tracker) VALUES (:id, :if, :pool, :name, :bt, :dns, :dhcp)");
     $stmt->bindValue(':id', $vlan_id, SQLITE3_INTEGER);
     $stmt->bindValue(':if', $opt_key);
     $stmt->bindValue(':pool', $pool);
     $stmt->bindValue(':name', $name);
     $stmt->bindValue(':bt', $block_tracker, SQLITE3_INTEGER);
+    $stmt->bindValue(':dns', $dns_tracker, SQLITE3_INTEGER);
+    $stmt->bindValue(':dhcp', $dhcp_tracker, SQLITE3_INTEGER);
     $stmt->execute();
 
     // 6. Update floating rules (now includes new VLAN)
@@ -650,15 +666,14 @@ function handle_vlan_move() {
     $block_tracker = null;
 
     if ($new_pool === 'offline') {
-        $block_tracker = TRACKER_BASE + $vlan_id * 10;
-        $ip = "10.110.{$vlan_id}.1";
-        array_unshift($config['filter']['rule'], [
+        // Add interface block rule
+        $block_tracker = TRACKER_BASE + $vlan_id * 10 + 9;
+        $config['filter']['rule'][] = [
             'type' => 'block', 'interface' => $iface_key, 'ipprotocol' => 'inet',
-            'source' => ['any' => ''],
-            'destination' => ['any' => '', 'not' => '', 'address' => $ip, 'port' => '53'],
-            'descr' => "DaathNet {$vlan_id}: Offline block (except DNS)",
+            'source' => ['any' => ''], 'destination' => ['any' => ''],
+            'descr' => "DaathNet v{$vlan_id}: Offline block all",
             'tracker' => (string)$block_tracker,
-        ]);
+        ];
     } else {
         // Remove offline block — only if we own it
         if ($vlan['block_tracker']) {
@@ -724,7 +739,13 @@ function handle_vlan_delete($vlan_id) {
 
     $vlan_if = PARENT_IF . ".{$vlan_id}";
 
-    // 1. Remove offline block rule if exists (ownership checked)
+    // 1. Remove all interface rules (ownership checked via tracker)
+    if ($vlan['dns_tracker']) {
+        safe_remove_rule($vlan['dns_tracker']);
+    }
+    if ($vlan['dhcp_tracker']) {
+        safe_remove_rule($vlan['dhcp_tracker']);
+    }
     if ($vlan['block_tracker']) {
         safe_remove_rule($vlan['block_tracker']);
     }
