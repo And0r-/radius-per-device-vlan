@@ -11,6 +11,35 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Load .env for pfSense API config
+if [ -f "$(dirname "$0")/.env" ]; then
+    set -a; source "$(dirname "$0")/.env"; set +a
+fi
+
+# Create VLAN on pfSense firewall
+create_pfsense_vlan() {
+    local vlan_id="$1" name="$2" pool="$3"
+    if [ -z "$PFSENSE_API_URL" ] || [ -z "$PFSENSE_API_KEY" ]; then
+        echo -e "${YELLOW}Warning: pfSense API not configured, skipping VLAN creation${NC}"
+        return 0
+    fi
+    local safe_name
+    safe_name=$(echo "$name" | sed 's/[^a-zA-Z0-9_]/_/g' | cut -c1-32)
+    echo -e "${CYAN}Creating VLAN $vlan_id on pfSense...${NC}"
+    local result
+    result=$(curl -sk -X POST "${PFSENSE_API_URL}?endpoint=/vlan/create" \
+        -H "X-API-Key: $PFSENSE_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{\"vlan_id\":$vlan_id,\"name\":\"$safe_name\",\"pool\":\"$pool\"}" 2>&1)
+    if echo "$result" | grep -q '"status".*"created"'; then
+        echo -e "${GREEN}pfSense VLAN $vlan_id created.${NC}"
+    elif echo "$result" | grep -q '"already managed"'; then
+        echo -e "${YELLOW}pfSense VLAN $vlan_id already exists.${NC}"
+    else
+        echo -e "${RED}pfSense VLAN creation failed: $result${NC}"
+    fi
+}
+
 usage() {
     cat << 'EOF'
 FreeRADIUS Per-Device VLAN Management v2
@@ -86,6 +115,8 @@ cmd_add_user() {
 
     run_sql "INSERT INTO vlan_assignments (identity, ssid, auth_type, password, vlan_id, vlan_type, name)
         VALUES ('$username', '$ssid', 'enterprise', '$password', $vlan, 'e', '${name:-$username}');"
+
+    create_pfsense_vlan "$vlan" "${name:-$username}" "online"
 
     echo -e "${GREEN}User '$username' on '$ssid' → VLAN $vlan${NC}"
 }
@@ -174,6 +205,10 @@ cmd_add_device() {
 
     run_sql "INSERT INTO vlan_assignments (identity, ssid, auth_type, vlan_id, vlan_type, name)
         VALUES ('$mac', '$ssid', 'mac', $vlan, '$vtype', '${name:-Unknown}');"
+
+    local pool="online"
+    if [ "$vtype" = "o" ]; then pool="offline"; fi
+    create_pfsense_vlan "$vlan" "${name:-$mac}" "$pool"
 
     echo -e "${GREEN}Device '$mac' on '$ssid' → VLAN $vlan (type: $vtype)${NC}"
 }

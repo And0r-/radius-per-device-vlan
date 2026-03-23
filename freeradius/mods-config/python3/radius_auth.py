@@ -377,7 +377,6 @@ def authorize(p):
                                    assignment['password'], assignment.get('name'))
                 if not vlan:
                     return _reject(db, mac, username, ssid, 'VLAN pool exhausted - access denied')
-
             return (RLM_MODULE_UPDATED,
                     (('Tunnel-Type', '13'),
                      ('Tunnel-Medium-Type', '6'),

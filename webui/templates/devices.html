@@ -12,19 +12,16 @@
         </div>
         <div class="form-group">
             <label>SSID</label>
-            <input type="text" name="ssid" placeholder="DaathNet-IoT" required>
+            <select name="ssid" required>
+                {% for ssid, typ in ssid_map.items() if typ != 'e' %}
+                <option value="{{ ssid }}">{{ ssid }} ({{ typ }})</option>
+                {% endfor %}
+                <option value="">— other —</option>
+            </select>
         </div>
         <div class="form-group">
             <label>Device Name</label>
             <input type="text" name="name" placeholder="e.g. Brother Drucker">
-        </div>
-        <div class="form-group">
-            <label>Type</label>
-            <select name="vlan_type">
-                <option value="i">i — Internet</option>
-                <option value="o">o — Offline</option>
-                <option value="g">g — Guest</option>
-            </select>
         </div>
         <div class="form-group">
             <label>&nbsp;</label>

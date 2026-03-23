@@ -4,7 +4,11 @@ FreeRADIUS Per-Device VLAN — Web Management UI v2
 
 import os
 import re
+import json
+import ssl
 from flask import Flask, render_template, request, redirect, url_for, flash
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -21,10 +25,58 @@ DB_CONFIG = {
 }
 
 
+PFSENSE_API_URL = os.environ.get('PFSENSE_API_URL', '')
+PFSENSE_API_KEY = os.environ.get('PFSENSE_API_KEY', '')
+
+# Parse SSID_MAP for dropdowns
+SSID_MAP = {}
+_ssid_map_raw = os.environ.get('SSID_MAP', '')
+if _ssid_map_raw:
+    for entry in _ssid_map_raw.split(','):
+        entry = entry.strip()
+        if ':' in entry:
+            typ, ssid_name = entry.split(':', 1)
+            SSID_MAP[ssid_name.strip()] = typ.strip()
+
+def get_ssids_by_type(vtype):
+    """Get list of SSIDs for a given type."""
+    return [ssid for ssid, t in SSID_MAP.items() if t == vtype]
+
+def get_all_ssids():
+    """Get all SSIDs grouped by type."""
+    return SSID_MAP
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
+
+
 def get_db():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
     return conn
+
+
+def create_pfsense_vlan(vlan_id, name, pool):
+    """Create VLAN on pfSense. Returns (success, message)."""
+    if not PFSENSE_API_URL or not PFSENSE_API_KEY:
+        return True, 'pfSense API not configured'
+
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', name)[:32]
+    payload = json.dumps({'vlan_id': vlan_id, 'name': safe_name, 'pool': pool}).encode()
+
+    url = f"{PFSENSE_API_URL}?endpoint=/vlan/create"
+    req = Request(url, data=payload, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('X-API-Key', PFSENSE_API_KEY)
+
+    try:
+        resp = urlopen(req, timeout=30, context=_ssl_ctx)
+        result = json.loads(resp.read().decode())
+        return True, result.get('description', 'created')
+    except URLError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, str(e)
 
 
 def normalize_mac(raw):
@@ -80,7 +132,7 @@ def devices():
     device_list = cur.fetchall()
     cur.close()
     db.close()
-    return render_template('devices.html', devices=device_list)
+    return render_template('devices.html', devices=device_list, ssid_map=get_all_ssids())
 
 
 @app.route('/devices/add', methods=['POST'])
@@ -88,7 +140,7 @@ def device_add():
     mac = normalize_mac(request.form.get('mac', ''))
     ssid = request.form.get('ssid', '').strip()
     name = request.form.get('name', '').strip() or 'Unknown'
-    vtype = request.form.get('vlan_type', 'i')
+    vtype = SSID_MAP.get(ssid, 'i')  # Derive type from SSID_MAP
 
     if not is_valid_mac(mac):
         flash('Invalid MAC address.', 'error')
@@ -127,6 +179,10 @@ def device_add():
 
     cur.close()
     db.close()
+    pool = 'offline' if vtype == 'o' else 'online'
+    ok, msg = create_pfsense_vlan(vlan_id, name, pool)
+    if not ok:
+        flash(f'Device added but pfSense VLAN creation failed: {msg}', 'error')
     flash(f'Device {mac} on {ssid} → VLAN {vlan_id} (type: {vtype})', 'success')
     return redirect(url_for('devices'))
 
@@ -158,7 +214,7 @@ def users():
     user_list = cur.fetchall()
     cur.close()
     db.close()
-    return render_template('users.html', users=user_list)
+    return render_template('users.html', users=user_list, enterprise_ssids=get_ssids_by_type('e'))
 
 
 @app.route('/users/add', methods=['POST'])
@@ -202,6 +258,9 @@ def user_add():
 
     cur.close()
     db.close()
+    ok, msg = create_pfsense_vlan(vlan_id, name, 'online')
+    if not ok:
+        flash(f'User added but pfSense VLAN creation failed: {msg}', 'error')
     flash(f'User "{username}" on {ssid} → VLAN {vlan_id}', 'success')
     return redirect(url_for('users'))
 

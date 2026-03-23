@@ -16,7 +16,12 @@
         </div>
         <div class="form-group">
             <label>SSID</label>
-            <input type="text" name="ssid" placeholder="DaathNet-Secure" required>
+            <select name="ssid" required>
+                {% for ssid in enterprise_ssids %}
+                <option value="{{ ssid }}">{{ ssid }}</option>
+                {% endfor %}
+                <option value="">— other —</option>
+            </select>
         </div>
         <div class="form-group">
             <label>Device Name</label>
