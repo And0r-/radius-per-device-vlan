@@ -371,9 +371,10 @@ function pf_ensure_internal_alias() {
 }
 
 function make_description($vlan_id, $pool, $name) {
-    $p = ($pool === 'offline') ? 'x' : 'o';
-    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '_', $name);
-    return "vlan_{$vlan_id}_{$p}_{$safe}";
+    $p = ($pool === 'offline') ? 'o' : 'i';
+    // No hyphens or special chars — pf interprets them as operators in macro names
+    $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', $name);
+    return "v{$vlan_id}{$p}_{$safe}";
 }
 
 // ─── Floating Rules Init ────────────────────────────────────

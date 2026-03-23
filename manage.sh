@@ -37,7 +37,7 @@ EOF
 }
 
 run_sql() {
-    $PSQL -c "$1" 2>/dev/null
+    $PSQL -c "$1" 2>/dev/null | head -1
 }
 
 normalize_mac() {
