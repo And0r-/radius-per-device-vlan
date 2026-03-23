@@ -6,14 +6,9 @@
 
 <div class="cards">
     <div class="card">
-        <div class="label">Online Pool (120-199)</div>
-        <div class="value" style="color: var(--green)">{{ pools.online.free }}</div>
-        <div class="sub">{{ pools.online.used }}/{{ pools.online.total }} used ({{ pools.online.pct }}%)</div>
-    </div>
-    <div class="card">
-        <div class="label">Offline Pool (100-119)</div>
-        <div class="value" style="color: var(--yellow)">{{ pools.offline.free }}</div>
-        <div class="sub">{{ pools.offline.used }}/{{ pools.offline.total }} used ({{ pools.offline.pct }}%)</div>
+        <div class="label">VLAN Pool</div>
+        <div class="value" style="color: var(--green)">{{ free }}</div>
+        <div class="sub">{{ used }}/{{ total }} used ({{ pct }}%)</div>
     </div>
     <div class="card">
         <div class="label">Enterprise Users</div>
@@ -23,12 +18,21 @@
         <div class="label">MAC Devices</div>
         <div class="value">{{ device_count }}</div>
     </div>
+    <div class="card">
+        <div class="label">By Type</div>
+        <div class="sub" style="margin-top:0.5rem">
+            {% for t, c in type_counts.items() %}
+            <span class="badge {{ 'online' if t == 'i' else 'offline' if t == 'o' else 'accept' }}">{{ t }}={{ c }}</span>
+            {% endfor %}
+            {% if not type_counts %}—{% endif %}
+        </div>
+    </div>
 </div>
 
 <h2 class="section-title">Recent Auth Log</h2>
 <table>
     <thead>
-        <tr><th>Time</th><th>MAC</th><th>User</th><th>Result</th><th>VLAN</th><th>SSID</th></tr>
+        <tr><th>Time</th><th>MAC</th><th>User</th><th>SSID</th><th>Result</th><th>VLAN</th><th>Type</th></tr>
     </thead>
     <tbody>
         {% for log in recent_logs %}
@@ -36,13 +40,14 @@
             <td>{{ log.ts.strftime('%Y-%m-%d %H:%M:%S') if log.ts else '' }}</td>
             <td class="mono">{{ log.mac or '' }}</td>
             <td>{{ log.username or '' }}</td>
+            <td>{{ log.ssid or '' }}</td>
             <td><span class="badge {{ log.result }}">{{ log.result }}</span></td>
             <td>{{ log.vlan_id or '' }}</td>
-            <td>{{ log.ssid or '' }}</td>
+            <td>{{ log.vlan_type or '' }}</td>
         </tr>
         {% endfor %}
         {% if not recent_logs %}
-        <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:2rem">No auth logs yet</td></tr>
+        <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:2rem">No auth logs yet</td></tr>
         {% endif %}
     </tbody>
 </table>

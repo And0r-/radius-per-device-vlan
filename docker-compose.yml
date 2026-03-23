@@ -15,6 +15,8 @@ services:
       - RADIUS_SECRET=${RADIUS_SECRET}
       - PFSENSE_API_URL=${PFSENSE_API_URL}
       - PFSENSE_API_KEY=${PFSENSE_API_KEY}
+      - VLAN_LIMIT=${VLAN_LIMIT}
+      - SSID_MAP=${SSID_MAP}
     volumes:
       # Templates (contain ${VAR} placeholders, entrypoint runs envsubst)
       - ./freeradius/clients.conf:/templates/clients.conf:ro
@@ -55,6 +57,8 @@ services:
       - SECRET_KEY=${RADIUS_SECRET}
       - PFSENSE_API_URL=${PFSENSE_API_URL}
       - PFSENSE_API_KEY=${PFSENSE_API_KEY}
+      - VLAN_LIMIT=${VLAN_LIMIT}
+      - SSID_MAP=${SSID_MAP}
     depends_on:
       postgres:
         condition: service_healthy

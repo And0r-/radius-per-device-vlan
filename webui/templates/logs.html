@@ -13,7 +13,7 @@
 
 <table>
     <thead>
-        <tr><th>Time</th><th>MAC</th><th>User</th><th>Result</th><th>VLAN</th><th>SSID</th></tr>
+        <tr><th>Time</th><th>MAC</th><th>User</th><th>SSID</th><th>Result</th><th>VLAN</th><th>Type</th></tr>
     </thead>
     <tbody>
         {% for log in logs %}
@@ -21,13 +21,14 @@
             <td>{{ log.ts.strftime('%Y-%m-%d %H:%M:%S') if log.ts else '' }}</td>
             <td class="mono">{{ log.mac or '' }}</td>
             <td>{{ log.username or '' }}</td>
+            <td>{{ log.ssid or '' }}</td>
             <td><span class="badge {{ log.result }}">{{ log.result }}</span></td>
             <td>{{ log.vlan_id or '' }}</td>
-            <td>{{ log.ssid or '' }}</td>
+            <td>{{ log.vlan_type or '' }}</td>
         </tr>
         {% endfor %}
         {% if not logs %}
-        <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:2rem">No logs yet</td></tr>
+        <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:2rem">No logs yet</td></tr>
         {% endif %}
     </tbody>
 </table>

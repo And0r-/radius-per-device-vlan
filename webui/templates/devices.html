@@ -8,17 +8,22 @@
     <div class="form-row">
         <div class="form-group">
             <label>MAC Address</label>
-            <input type="text" name="mac" placeholder="aabbccddeeff" required pattern="[0-9a-fA-F:\-\.]{12,17}">
+            <input type="text" name="mac" placeholder="aabbccddeeff" required>
+        </div>
+        <div class="form-group">
+            <label>SSID</label>
+            <input type="text" name="ssid" placeholder="DaathNet-IoT" required>
         </div>
         <div class="form-group">
             <label>Device Name</label>
             <input type="text" name="name" placeholder="e.g. Brother Drucker">
         </div>
         <div class="form-group">
-            <label>Pool</label>
-            <select name="pool">
-                <option value="online">Online (120-199)</option>
-                <option value="offline">Offline (100-119)</option>
+            <label>Type</label>
+            <select name="vlan_type">
+                <option value="i">i — Internet</option>
+                <option value="o">o — Offline</option>
+                <option value="g">g — Guest</option>
             </select>
         </div>
         <div class="form-group">
@@ -30,30 +35,26 @@
 
 <table>
     <thead>
-        <tr><th>MAC</th><th>VLAN</th><th>Pool</th><th>Category</th><th>Name</th><th>Added</th><th>Actions</th></tr>
+        <tr><th>MAC</th><th>SSID</th><th>VLAN</th><th>Type</th><th>Name</th><th>Added</th><th>Actions</th></tr>
     </thead>
     <tbody>
         {% for d in devices %}
         <tr>
-            <td class="mono">{{ d.mac }}</td>
+            <td class="mono">{{ d.identity }}</td>
+            <td>{{ d.ssid }}</td>
             <td>{{ d.vlan_id }}</td>
-            <td><span class="badge {{ d.pool }}">{{ d.pool }}</span></td>
-            <td>{{ d.ssid_category or '' }}</td>
-            <td>{{ d.device_name or '' }}</td>
+            <td><span class="badge {{ 'online' if d.vlan_type == 'i' else 'offline' }}">{{ d.vlan_type }}</span></td>
+            <td>{{ d.name or '' }}</td>
             <td>{{ d.created_at.strftime('%Y-%m-%d') if d.created_at else '' }}</td>
             <td class="actions">
-                <form method="POST" action="{{ url_for('device_move', mac=d.mac) }}">
-                    <input type="hidden" name="pool" value="{{ 'offline' if d.pool == 'online' else 'online' }}">
-                    <button type="submit" class="btn btn-ghost btn-sm">→ {{ 'offline' if d.pool == 'online' else 'online' }}</button>
-                </form>
-                <form method="POST" action="{{ url_for('device_delete', mac=d.mac) }}" onsubmit="return confirm('Remove {{ d.device_name or d.mac }}?')">
+                <form method="POST" action="{{ url_for('device_delete', mac=d.identity, ssid=d.ssid) }}" onsubmit="return confirm('Remove {{ d.name or d.identity }}?')">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
             </td>
         </tr>
         {% endfor %}
         {% if not devices %}
-        <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:2rem">No devices yet — add one above</td></tr>
+        <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:2rem">No devices yet — add one above or connect to WiFi</td></tr>
         {% endif %}
     </tbody>
 </table>

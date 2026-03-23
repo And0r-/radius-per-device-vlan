@@ -1,8 +1,9 @@
 """
-FreeRADIUS Python3 Module — Per-Device VLAN Assignment
+FreeRADIUS Python3 Module — Per-Device VLAN Assignment v2
 
-Handles: Device lookup, auto-assignment from VLAN pools,
-         simultaneous-use enforcement, SSID-based pool selection
+Key = (identity, ssid) — same device on different SSIDs gets different VLANs.
+Enterprise users identified by username, MAC-auth by MAC address.
+SSID determines VLAN type via SSID_MAP env var.
 """
 
 import os
@@ -27,16 +28,20 @@ DB_NAME = os.environ.get('POSTGRES_DB', 'radius')
 DB_USER = os.environ.get('POSTGRES_USER', 'radius')
 DB_PASS = os.environ.get('POSTGRES_PASSWORD', '')
 
-# SSID -> category mapping
-SSID_MAP = {
-    'daathnet-secure':       'secure',
-    'daathnet-guest-secure': 'guest-secure',
-    'daathnet-guest':        'guest',
-    'daathnet-iot-secure':   'iot-secure',
-    'daathnet-iot-premium':  'iot-premium',
-    'daathnet-iot-offline':  'iot-offline',
-    'daathnet-iot':          'iot',
-}
+# VLAN limit (max VLANs that can be created)
+VLAN_LIMIT = int(os.environ.get('VLAN_LIMIT', '100'))
+
+# SSID -> VLAN type mapping from env
+# Format: "o:SSID1,g:SSID2,e:SSID3,e:SSID4"
+# Unmatched SSIDs default to 'i' (internet)
+SSID_TYPE_MAP = {}
+_ssid_map_raw = os.environ.get('SSID_MAP', '')
+if _ssid_map_raw:
+    for entry in _ssid_map_raw.split(','):
+        entry = entry.strip()
+        if ':' in entry:
+            typ, ssid_name = entry.split(':', 1)
+            SSID_TYPE_MAP[ssid_name.strip().lower()] = typ.strip().lower()
 
 _db_conn = None
 
@@ -46,7 +51,6 @@ def get_db():
     global _db_conn
     try:
         if _db_conn and not _db_conn.closed:
-            # Test if connection is alive
             _db_conn.isolation_level
             return _db_conn
     except Exception:
@@ -66,38 +70,31 @@ def get_db():
 
 
 def normalize_mac(raw):
-    """Normalize MAC to lowercase 12-char hex."""
     if not raw:
         return ''
     return re.sub(r'[:\-\.]', '', raw).lower()
 
 
 def is_mac_address(s):
-    """Check if string is a MAC address."""
     n = normalize_mac(s)
     return bool(re.match(r'^[0-9a-f]{12}$', n))
 
 
 def extract_ssid(called_station_id):
-    """Extract SSID from Called-Station-Id (format: AA-BB-CC-DD-EE-FF:SSID)."""
     if not called_station_id:
         return ''
     m = re.search(r':(.+)$', called_station_id)
     return m.group(1) if m else ''
 
 
-def ssid_to_category(ssid):
+def ssid_to_type(ssid):
+    """Map SSID to VLAN type using SSID_MAP. Default: 'i' (internet)."""
     if not ssid:
-        return 'unknown'
-    return SSID_MAP.get(ssid.lower(), 'unknown')
-
-
-def category_to_pool(category):
-    return 'offline' if category == 'iot-offline' else 'online'
+        return 'i'
+    return SSID_TYPE_MAP.get(ssid.lower(), 'i')
 
 
 def request_to_dict(p):
-    """Convert FreeRADIUS request tuple to dict."""
     d = {}
     if p:
         for pair in p:
@@ -107,7 +104,7 @@ def request_to_dict(p):
 
 
 def check_simultaneous_use(db, calling_station):
-    """Check if there's an active session. Returns True if login is allowed."""
+    """Check if there's an active session. Returns True if login allowed."""
     if not calling_station:
         return True
 
@@ -122,7 +119,6 @@ def check_simultaneous_use(db, calling_station):
     if active_count == 0:
         return True
 
-    # Check if session is stale (no update > 30 seconds)
     cur = db.cursor()
     cur.execute(
         """SELECT COALESCE(acctupdatetime, acctstarttime) < NOW() - INTERVAL '30 seconds'
@@ -135,7 +131,6 @@ def check_simultaneous_use(db, calling_station):
     cur.close()
 
     if row and row[0]:
-        # Stale session — close it
         cur = db.cursor()
         cur.execute(
             """UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Stale-Session'
@@ -146,76 +141,82 @@ def check_simultaneous_use(db, calling_station):
         radiusd.radlog(radiusd.L_INFO, f"PYTHON: Closed stale session(s) for {calling_station}")
         return True
 
-    return False  # Active session exists — reject
+    return False
 
 
-def assign_vlan_from_pool(db, mac, pool, category, ssid, username=None, device_name=None):
-    """Assign next free VLAN from pool. Returns vlan_id or None."""
+def assign_vlan(db, identity, ssid, vlan_type, auth_type, password=None, name=None):
+    """Assign next free VLAN. Returns vlan_id or None."""
     cur = db.cursor()
 
-    # Check pool availability
-    cur.execute("SELECT COUNT(*) FROM vlan_pool WHERE pool = %s AND in_use = false", (pool,))
-    free_count = cur.fetchone()[0]
+    # Check VLAN limit
+    cur.execute("SELECT COUNT(*) FROM vlan_pool WHERE in_use = true")
+    used = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM vlan_pool")
+    total = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM vlan_pool WHERE pool = %s", (pool,))
-    total_count = cur.fetchone()[0]
+    if used >= VLAN_LIMIT:
+        radiusd.radlog(radiusd.L_ERR, f"PYTHON: VLAN limit ({VLAN_LIMIT}) reached! Rejecting {identity}")
+        cur.close()
+        return None
 
-    if free_count == 0:
-        radiusd.radlog(radiusd.L_ERR, f"PYTHON: Pool '{pool}' EXHAUSTED! Rejecting {mac}")
+    free = total - used
+    if free == 0:
+        radiusd.radlog(radiusd.L_ERR, f"PYTHON: All VLANs exhausted! Rejecting {identity}")
         cur.close()
         return None
 
     # Warning at 80%
-    if total_count > 0:
-        usage_pct = ((total_count - free_count) / total_count) * 100
+    if total > 0:
+        usage_pct = (used / total) * 100
         if usage_pct >= 80:
             radiusd.radlog(radiusd.L_WARN,
-                f"PYTHON WARNING: Pool '{pool}' is {int(usage_pct)}% full ({free_count} free)")
+                f"PYTHON WARNING: VLAN pool {int(usage_pct)}% full ({free} free)")
 
     # Atomically assign next free VLAN
     cur.execute(
-        """UPDATE vlan_pool SET in_use = true, assigned_mac = %s, assigned_at = NOW()
+        """UPDATE vlan_pool SET in_use = true, vlan_type = %s,
+               assigned_to = %s, assigned_ssid = %s, assigned_at = NOW()
            WHERE vlan_id = (
                SELECT vlan_id FROM vlan_pool
-               WHERE pool = %s AND in_use = false
+               WHERE in_use = false
                ORDER BY vlan_id LIMIT 1
                FOR UPDATE SKIP LOCKED
            ) RETURNING vlan_id""",
-        (mac, pool)
+        (vlan_type, identity, ssid)
     )
     row = cur.fetchone()
 
     if not row:
-        radiusd.radlog(radiusd.L_ERR, f"PYTHON: VLAN assignment race condition for {mac}")
+        radiusd.radlog(radiusd.L_ERR, f"PYTHON: VLAN assignment failed for {identity}")
         cur.close()
         return None
 
     vlan_id = row[0]
 
-    # Create device entry
+    # Create assignment entry
     cur.execute(
-        """INSERT INTO devices (mac, username, vlan_id, device_name, ssid_category, created_at, updated_at)
-           VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-           ON CONFLICT (mac) DO UPDATE SET vlan_id = %s, ssid_category = %s, updated_at = NOW()""",
-        (mac, username, vlan_id, device_name or 'Auto-assigned', category,
-         vlan_id, category)
+        """INSERT INTO vlan_assignments (identity, ssid, auth_type, password, vlan_id, vlan_type, name)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (identity, ssid) DO UPDATE
+           SET vlan_id = %s, vlan_type = %s, updated_at = NOW()""",
+        (identity, ssid, auth_type, password, vlan_id, vlan_type, name or 'Auto-assigned',
+         vlan_id, vlan_type)
     )
     cur.close()
 
     radiusd.radlog(radiusd.L_INFO,
-        f"PYTHON: Auto-assigned VLAN {vlan_id} (pool: {pool}) to {mac} (SSID: {ssid})")
+        f"PYTHON: Assigned VLAN {vlan_id} (type:{vlan_type}) to {identity} on {ssid}")
     return vlan_id
 
 
-def _log_auth(db, mac, username, result, vlan, ssid):
-    """Log authentication attempt to auth_log table."""
+def _log_auth(db, mac, username, ssid, result, vlan, vlan_type):
     if not db:
         return
     try:
         cur = db.cursor()
         cur.execute(
-            "INSERT INTO auth_log (mac, username, result, vlan_id, ssid) VALUES (%s, %s, %s, %s, %s)",
-            (mac or None, username or None, result, vlan, ssid or None)
+            "INSERT INTO auth_log (mac, username, ssid, result, vlan_id, vlan_type) VALUES (%s, %s, %s, %s, %s, %s)",
+            (mac or None, username or None, ssid or None, result, vlan, vlan_type)
         )
         cur.close()
     except Exception as e:
@@ -223,15 +224,14 @@ def _log_auth(db, mac, username, result, vlan, ssid):
 
 
 def _reject(db, mac, username, ssid, message):
-    """Return REJECT and log it."""
-    _log_auth(db, mac, username, 'reject', None, ssid)
+    _log_auth(db, mac, username, ssid, 'reject', None, None)
     return (RLM_MODULE_REJECT,
             (('Reply-Message', message),),
             ())
 
 
 def authorize(p):
-    """Main authorize handler. Called for both MAC auth (outer) and Enterprise auth (inner tunnel)."""
+    """Main authorize handler."""
     req = request_to_dict(p)
 
     username = req.get('User-Name', '')
@@ -239,11 +239,9 @@ def authorize(p):
     called_station = req.get('Called-Station-Id', '')
 
     ssid = extract_ssid(called_station)
-    category = ssid_to_category(ssid)
-    pool = category_to_pool(category)
+    vlan_type = ssid_to_type(ssid)
     mac_auth = is_mac_address(username)
 
-    # Only normalize actual MACs, not usernames
     if mac_auth:
         mac = normalize_mac(username)
     elif calling_station:
@@ -260,27 +258,30 @@ def authorize(p):
 
         if mac_auth:
             # --- MAC Authentication ---
-            cur.execute("SELECT * FROM devices WHERE mac = %s", (mac,))
-            device = cur.fetchone()
+            identity = mac
+
+            # Lookup by (mac, ssid)
+            cur.execute("SELECT * FROM vlan_assignments WHERE identity = %s AND ssid = %s",
+                        (identity, ssid))
+            assignment = cur.fetchone()
             cur.close()
 
-            if device:
-                # Known device — check simultaneous use
+            if assignment:
+                # Known device on this SSID
                 if not check_simultaneous_use(db, calling_station):
-                    radiusd.radlog(radiusd.L_INFO, f"PYTHON: Simul-use REJECT for MAC {mac}")
                     return _reject(db, mac, username, ssid, 'Simultaneous login not allowed')
 
                 return (RLM_MODULE_UPDATED,
                         (('Tunnel-Type', '13'),
                          ('Tunnel-Medium-Type', '6'),
-                         ('Tunnel-Private-Group-Id', str(device['vlan_id']))),
+                         ('Tunnel-Private-Group-Id', str(assignment['vlan_id']))),
                         (('Cleartext-Password', mac),))
 
-            # Unknown MAC — auto-assign
+            # Unknown MAC on this SSID — auto-assign
             if not check_simultaneous_use(db, calling_station):
                 return _reject(db, mac, username, ssid, 'Simultaneous login not allowed')
 
-            vlan = assign_vlan_from_pool(db, mac, pool, category, ssid)
+            vlan = assign_vlan(db, identity, ssid, vlan_type, 'mac')
             if not vlan:
                 return _reject(db, mac, username, ssid, 'VLAN pool exhausted - access denied')
 
@@ -291,28 +292,31 @@ def authorize(p):
                     (('Cleartext-Password', mac),))
 
         else:
-            # --- Enterprise Authentication (EAP-PEAP/MSCHAPv2) ---
-            cur.execute("SELECT * FROM devices WHERE username = %s", (username,))
-            device = cur.fetchone()
+            # --- Enterprise Authentication ---
+            identity = username
+
+            # Lookup by (username, ssid)
+            cur.execute("SELECT * FROM vlan_assignments WHERE identity = %s AND ssid = %s AND auth_type = 'enterprise'",
+                        (identity, ssid))
+            assignment = cur.fetchone()
             cur.close()
 
-            if not device:
-                radiusd.radlog(radiusd.L_INFO, f"PYTHON: Unknown enterprise user '{username}' REJECTED")
+            if not assignment:
+                radiusd.radlog(radiusd.L_INFO, f"PYTHON: Unknown enterprise user '{username}' on SSID '{ssid}'")
                 return _reject(db, mac, username, ssid, 'Unknown user - access denied')
 
-            if not device.get('password'):
-                radiusd.radlog(radiusd.L_ERR, f"PYTHON: User '{username}' has no password")
+            if not assignment.get('password'):
                 return _reject(db, mac, username, ssid, 'Account configuration error')
 
-            # Simultaneous use check
+            # Simultaneous use check by MAC
             if calling_station and not check_simultaneous_use(db, calling_station):
-                radiusd.radlog(radiusd.L_INFO, f"PYTHON: Simul-use REJECT for user '{username}'")
                 return _reject(db, mac, username, ssid, 'Simultaneous login not allowed')
 
-            vlan = device.get('vlan_id')
+            vlan = assignment.get('vlan_id')
             if not vlan:
-                vlan = assign_vlan_from_pool(db, mac or f'ent-{username}', 'online',
-                                             category, ssid, username)
+                # No VLAN yet — assign one
+                vlan = assign_vlan(db, identity, ssid, vlan_type, 'enterprise',
+                                   assignment['password'], assignment.get('name'))
                 if not vlan:
                     return _reject(db, mac, username, ssid, 'VLAN pool exhausted - access denied')
 
@@ -320,7 +324,7 @@ def authorize(p):
                     (('Tunnel-Type', '13'),
                      ('Tunnel-Medium-Type', '6'),
                      ('Tunnel-Private-Group-Id', str(vlan))),
-                    (('Cleartext-Password', device['password']),))
+                    (('Cleartext-Password', assignment['password']),))
 
     except Exception as e:
         radiusd.radlog(radiusd.L_ERR, f"PYTHON: authorize exception: {e}")
@@ -339,20 +343,25 @@ def post_auth(p):
     mac_auth = is_mac_address(username)
     if mac_auth:
         mac = normalize_mac(username)
+        identity = mac
     elif calling_station:
         mac = normalize_mac(calling_station)
+        identity = username
     else:
         mac = ''
+        identity = username
 
     db = get_db()
     if db:
         try:
             cur = db.cursor()
-            cur.execute("SELECT vlan_id FROM devices WHERE mac = %s", (mac,))
+            cur.execute("SELECT vlan_id, vlan_type FROM vlan_assignments WHERE identity = %s AND ssid = %s",
+                        (identity, ssid))
             row = cur.fetchone()
             vlan = row[0] if row else None
+            vtype = row[1] if row else None
             cur.close()
-            _log_auth(db, mac, username, 'accept', vlan, ssid)
+            _log_auth(db, mac, username, ssid, 'accept', vlan, vtype)
         except Exception as e:
             radiusd.radlog(radiusd.L_ERR, f"PYTHON: post_auth log error: {e}")
 
@@ -360,7 +369,6 @@ def post_auth(p):
 
 
 def detach():
-    """Cleanup on module unload."""
     global _db_conn
     if _db_conn:
         try:
