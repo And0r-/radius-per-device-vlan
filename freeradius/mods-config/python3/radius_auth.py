@@ -8,9 +8,13 @@ SSID determines VLAN type via SSID_MAP env var.
 
 import os
 import re
+import json
+import ssl
 import radiusd
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 # FreeRADIUS return codes
 RLM_MODULE_REJECT  = 0
@@ -30,6 +34,15 @@ DB_PASS = os.environ.get('POSTGRES_PASSWORD', '')
 
 # VLAN limit (max VLANs that can be created)
 VLAN_LIMIT = int(os.environ.get('VLAN_LIMIT', '100'))
+
+# pfSense API config
+PFSENSE_API_URL = os.environ.get('PFSENSE_API_URL', '')
+PFSENSE_API_KEY = os.environ.get('PFSENSE_API_KEY', '')
+
+# SSL context for self-signed pfSense cert
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
 
 # SSID -> VLAN type mapping from env
 # Format: "o:SSID1,g:SSID2,e:SSID3,e:SSID4"
@@ -92,6 +105,46 @@ def ssid_to_type(ssid):
     if not ssid:
         return 'i'
     return SSID_TYPE_MAP.get(ssid.lower(), 'i')
+
+
+def vlan_type_to_pool(vlan_type):
+    """Map VLAN type to pfSense pool name."""
+    return 'offline' if vlan_type == 'o' else 'online'
+
+
+def create_pfsense_vlan(vlan_id, identity, vlan_type):
+    """Call pfSense API to create VLAN on the firewall. Returns True on success."""
+    if not PFSENSE_API_URL or not PFSENSE_API_KEY:
+        radiusd.radlog(radiusd.L_WARN, f"PYTHON: pfSense API not configured, skipping VLAN {vlan_id} creation")
+        return True  # Don't block auth if API not configured
+
+    # Build safe name from identity (MAC or username)
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', identity)[:32]
+    pool = vlan_type_to_pool(vlan_type)
+
+    payload = json.dumps({
+        'vlan_id': vlan_id,
+        'name': safe_name,
+        'pool': pool,
+    }).encode('utf-8')
+
+    url = f"{PFSENSE_API_URL}?endpoint=/vlan/create"
+    req = Request(url, data=payload, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('X-API-Key', PFSENSE_API_KEY)
+
+    try:
+        resp = urlopen(req, timeout=30, context=_ssl_ctx)
+        result = json.loads(resp.read().decode('utf-8'))
+        radiusd.radlog(radiusd.L_INFO,
+            f"PYTHON: pfSense VLAN {vlan_id} created: {result.get('description', '?')}")
+        return True
+    except URLError as e:
+        radiusd.radlog(radiusd.L_ERR, f"PYTHON: pfSense API error creating VLAN {vlan_id}: {e}")
+        return False
+    except Exception as e:
+        radiusd.radlog(radiusd.L_ERR, f"PYTHON: pfSense API unexpected error: {e}")
+        return False
 
 
 def request_to_dict(p):
@@ -203,6 +256,11 @@ def assign_vlan(db, identity, ssid, vlan_type, auth_type, password=None, name=No
          vlan_id, vlan_type)
     )
     cur.close()
+
+    # Create VLAN on pfSense firewall
+    if not create_pfsense_vlan(vlan_id, identity, vlan_type):
+        radiusd.radlog(radiusd.L_WARN,
+            f"PYTHON: pfSense VLAN creation failed for {vlan_id}, auth proceeds anyway")
 
     radiusd.radlog(radiusd.L_INFO,
         f"PYTHON: Assigned VLAN {vlan_id} (type:{vlan_type}) to {identity} on {ssid}")
